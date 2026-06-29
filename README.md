@@ -1,4 +1,4 @@
-# MyMart Financial Shield — Chargeback Fraud Detection
+# MyMart Fraud Detection
 
 
 A multi-section deep learning assignment built around a fictional Malaysian e-commerce retailer, **MyMart**, facing a chargeback fraud problem. The goal across all four sections is to design, audit, and communicate a production-ready fraud detection pipeline using a Multi-Layer Perceptron (MLP).
