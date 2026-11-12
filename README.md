@@ -10,7 +10,6 @@ A multi-section deep learning assignment built around a fictional Malaysian e-co
 ```
 Mymart Fraud Detection Problem
 ├── Section A.ipynb       # Main modelling notebook (EDA → MLP → Evaluation)
-├── mymart_debug_fixed .py         # Section B: buggy pipeline + annotated fixes
 ├── Section-B_output.png           # Section B: before/after metric comparison chart
 ├── Section_B_Diagnosis.pdf        # Section B: written audit report
 ├── Section_C_BusinessBrief.pdf    # Section C: non-technical business brief
@@ -38,6 +37,7 @@ An end-to-end pipeline built in Google Colab, structured as follows:
 ### A2. Data Preparation
 - Median imputation for missing `account_age_days`
 - One-hot encoding for categorical features (`state`, `product_category`, `payment_method`, `device_type`)
+- Leakage-safe customer history features: prior transaction count, time since the previous transaction, and prior average order value
 - **Stratified train/validation/test split before scaling** to prevent data leakage
 - `StandardScaler` fitted on training data only; applied (not re-fitted) on val/test
 
@@ -53,31 +53,36 @@ Input → Dense(128) → BatchNorm → LeakyReLU(0.1) → Dropout(0.3)
 
 **Training strategies for imbalance:**
 - `class_weight='balanced'` to penalise missed chargebacks more heavily
-- SMOTE oversampling on the training set
+- SMOTENC categorical-safe oversampling on the training set
 - Focal Loss experiment to force attention on hard cases
 - `ReduceLROnPlateau` + `EarlyStopping` on validation PR-AUC
+- Repeated stratified training-fold stability checks with fold-specific scaling
 
 **Metrics used:** Precision-Recall AUC, Recall, F1-Score (not accuracy — a model predicting all-legitimate scores 97% accuracy trivially)
 
 ### A4. Evaluation & Threshold Tuning
 - Precision-Recall trade-off curve generated to find the optimal threshold
-- Decision threshold tuned to **0.65** for a "High-Efficiency" production mode
-- Permutation importance reveals `payment_method` and `customer_type` as top fraud signals
-- Probability calibration plot to assess confidence reliability
+- Precision-Recall trade-off curve generated to compare operating points
+- Balanced threshold selected by maximum validation F1
+- High-recall threshold selected as the **highest (strictest)** validation threshold that meets the 90% recall target; if the target is unattainable, the notebook reports and uses the best available recall point
+- Permutation importance is measured on validation data so the held-out test set remains reserved for final evaluation
+- Probability calibration plot assesses whether scores are reliable probabilities or should be used only for ranking
 
 ### A5. Results
 
 | Metric | Naive Baseline | Optimised MLP |
 |---|---|---|
-| Accuracy | 96.9% | Lower |
-| Recall (Chargebacks) | 0.00% | ~90% |
-| F1-Score (Class 1) | 0.0000 | Significant improvement |
-| Chargebacks Detected | 0 / 252 | **227 / 252** |
-| Potential Loss Prevented | RM 0 | **~RM 20,000** |
+| Accuracy | ~97% | Reported from the selected threshold |
+| Recall (Chargebacks) | 0.00% | Validation-tuned; reported on test |
+| F1-Score (Class 1) | 0.0000 | Reported on test |
+| Chargebacks Detected | 0 | Computed from the test split |
+| Potential Loss Prevented | RM 0 | Computed as detected chargebacks × RM 85 |
+
+Results are recomputed when the notebook runs; the test split is not used to select the model or thresholds.
 
 ---
 
-## Section B — Pipeline Audit (`mymart_debug_fixed .py`)
+## Section B — Pipeline Audit
 
 Three critical bugs were identified in the original consultant script and fixed:
 
@@ -87,7 +92,7 @@ Three critical bugs were identified in the original consultant script and fixed:
 | 2 | **Wrong Metric** | `accuracy` used on a 97/3 imbalanced dataset | A model predicting all-legitimate achieves 97% accuracy; fraud goes undetected |
 | 3 | **No Imbalance Handling** | No `class_weight` or resampling applied | Model ignores the minority class; 0% recall on actual chargebacks |
 
-The fixed script corrects all three: split-before-scale, class weights, stratified split, and Recall as the primary metric.
+The audited pipeline corrects all three: split-before-scale, class weights, stratified split, and Recall as the primary metric. See `Section_B_Diagnosis.pdf` and `Section-B_output.png` for the written diagnosis and comparison.
 
 ---
 
@@ -117,7 +122,7 @@ pip install tensorflow pandas numpy matplotlib seaborn scikit-learn imbalanced-l
 |---|---|
 | `tensorflow` / `keras` | MLP model, Focal Loss, callbacks |
 | `scikit-learn` | Preprocessing, metrics, permutation importance, calibration |
-| `imbalanced-learn` | SMOTE oversampling |
+| `imbalanced-learn` | SMOTENC categorical-safe oversampling |
 | `pandas` / `numpy` | Data wrangling |
 | `matplotlib` / `seaborn` | Visualisations |
 
@@ -125,11 +130,12 @@ pip install tensorflow pandas numpy matplotlib seaborn scikit-learn imbalanced-l
 
 ## Running the Notebook
 
-1. Upload `mymart_transactions_v1.csv` to `/content/` in Google Colab
+1. Place `mymart_transactions_v1.csv` beside the notebook, or upload it to `/content/` in Google Colab
 2. Open `Section A.ipynb` in Colab
-3. Run all cells in order — dependencies are installed in Cell 2
+3. Run all cells in order — dependencies are installed in Cell 2 when missing
+4. Review the validation-tuned thresholds and recomputed test-set business-impact table
 
-> The `.py` file in Section B is a standalone script and requires the same CSV in the working directory.
+> Section B is represented by the diagnosis report and comparison chart included in this project.
 
 ---
 
@@ -138,3 +144,4 @@ pip install tensorflow pandas numpy matplotlib seaborn scikit-learn imbalanced-l
 - **Accuracy is a misleading metric for imbalanced fraud data.** Always evaluate with Precision, Recall, F1, and AUC-PR.
 - **Data leakage is silent.** Fitting a scaler before splitting inflates validation scores and hides production failures.
 - **Threshold tuning matters.** The 0.5 default is not optimal for minority-class detection; calibrate it against the actual business cost of false negatives vs. false positives.
+- **Keep the test set honest.** Select the winning strategy, thresholds, and feature explanations without using test labels; use test data only for final assessment and business estimates.
