@@ -1,147 +1,118 @@
 # MyMart Fraud Detection
 
+An end-to-end, production-minded fraud-triage project for a fictional Malaysian e-commerce retailer. The core deliverable is [`Section A.ipynb`](Section%20A.ipynb), which develops a Multi-Layer Perceptron (MLP) for ranking likely chargebacks into a human-review queue.
 
-A multi-section deep learning assignment built around a fictional Malaysian e-commerce retailer, **MyMart**, facing a chargeback fraud problem. The goal across all four sections is to design, audit, and communicate a production-ready fraud detection pipeline using a Multi-Layer Perceptron (MLP).
+The project addresses the classic failure mode of imbalanced fraud detection: a model can report roughly 97% accuracy by predicting every transaction as legitimate while preventing **RM 0** in chargeback losses.
 
----
+## What Is Improved
 
-## Project Structure
+- **Future-facing evaluation:** transactions are split chronologically into 60% training, 20% validation, and the latest 20% out-of-time test period.
+- **Causal customer features:** history features use only earlier transactions, never future events or labels.
+- **Leakage-safe preprocessing:** numeric medians, category vocabulary, scaling statistics, and SMOTENC are all fit on the training period only.
+- **Honest model selection:** all candidate strategies are compared with validation PR-AUC; the test period is scored only after selecting the final model.
+- **Operational policy analysis:** the notebook compares validation-max-F1, target-recall, and fixed-capacity review policies rather than treating `0.5` as a business decision.
+- **Decision-ready reporting:** test PR-AUC includes a bootstrap confidence interval; capacity, lift, review workload, and potential loss prevented are reported in ringgit.
 
-```
-Mymart Fraud Detection Problem
-├── Section A.ipynb       # Main modelling notebook (EDA → MLP → Evaluation)
-├── Section-B_output.png           # Section B: before/after metric comparison chart
-├── Section_B_Diagnosis.pdf        # Section B: written audit report
-├── Section_C_BusinessBrief.pdf    # Section C: non-technical business brief
-└── Section_D_AILog.pdf            # Section D: AI interaction log
-```
+## Repository Structure
 
----
-
-## The Problem
-
-MyMart's operations team inherited a fraud detection script from a previous consultant. The model reported **97% accuracy** in testing but flagged **almost zero chargebacks** in production — a classic symptom of a broken ML pipeline on an imbalanced dataset.
-
-The dataset (`mymart_transactions_v1.csv`) contains ~42,000 transactions with a severe **96.9% / 3.1%** legitimate-to-chargeback split. Each missed chargeback costs MyMart **RM 85** in direct losses and penalties.
-
----
-
-## Section A — Model Development (`Section A.ipynb`)
-
-An end-to-end pipeline built in Google Colab, structured as follows:
-
-### A1. Data Loading & EDA
-- Inspects class imbalance, missing values, and feature distributions
-- Visualises the "needle in a haystack" problem: 3.1% fraud across 42,000 rows
-
-### A2. Data Preparation
-- Median imputation for missing `account_age_days`
-- One-hot encoding for categorical features (`state`, `product_category`, `payment_method`, `device_type`)
-- Leakage-safe customer history features: prior transaction count, time since the previous transaction, and prior average order value
-- **Stratified train/validation/test split before scaling** to prevent data leakage
-- `StandardScaler` fitted on training data only; applied (not re-fitted) on val/test
-
-### A3. Model Architecture — The "Financial Shield"
-
-An MLP chosen deliberately over simpler models for its ability to capture **non-linear interactions** between features (e.g., high-value order + new account + specific device type):
-
-```
-Input → Dense(128) → BatchNorm → LeakyReLU(0.1) → Dropout(0.3)
-      → Dense(64)  → BatchNorm → LeakyReLU(0.1) → Dropout(0.2)
-      → Dense(1, sigmoid)
+```text
+Mymart-Fraud-Detection-Problem-main/
+├── Section A.ipynb                 # Main modelling notebook
+├── mymart_transactions_v1.csv      # Source transaction data (not modified)
+├── README.md                       # Project guide
+├── Section_B_Diagnosis.pdf         # Pipeline audit report
+├── Section-B_output.png            # Section B comparison visual
+├── Section_C_BusinessBrief.pdf     # Non-technical business brief
+└── Section_D_AILog.pdf             # AI interaction log
 ```
 
-**Training strategies for imbalance:**
-- `class_weight='balanced'` to penalise missed chargebacks more heavily
-- SMOTENC categorical-safe oversampling on the training set
-- Focal Loss experiment to force attention on hard cases
-- `ReduceLROnPlateau` + `EarlyStopping` on validation PR-AUC
-- Repeated stratified training-fold stability checks with fold-specific scaling
+## Dataset
 
-**Metrics used:** Precision-Recall AUC, Recall, F1-Score (not accuracy — a model predicting all-legitimate scores 97% accuracy trivially)
+`mymart_transactions_v1.csv` contains 42,000 transactions from January 2023 to June 2024. The binary target is `chargeback`, where `1` means a confirmed chargeback.
 
-### A4. Evaluation & Threshold Tuning
-- Precision-Recall trade-off curve generated to find the optimal threshold
-- Precision-Recall trade-off curve generated to compare operating points
-- Balanced threshold selected by maximum validation F1
-- High-recall threshold selected as the **highest (strictest)** validation threshold that meets the 90% recall target; if the target is unattainable, the notebook reports and uses the best available recall point
-- Permutation importance is measured on validation data so the held-out test set remains reserved for final evaluation
-- Probability calibration plot assesses whether scores are reliable probabilities or should be used only for ranking
+| Field | Role |
+|---|---|
+| `transaction_id`, `customer_id` | Unique identifiers; excluded from the model |
+| `txn_date` | Event time; used for chronological splitting and causal time features |
+| `state`, `product_category`, `payment_method`, `device_type` | Categorical transaction context |
+| `order_value_myr`, `num_items`, `account_age_days` | Numeric transaction / customer signals |
+| `is_new_customer` | Customer-status signal |
+| `chargeback` | Target label (`0` legitimate, `1` chargeback) |
 
-### A5. Results
+The source data is intentionally left unchanged. The notebook validates its schema and fails early for duplicate IDs, invalid labels, invalid timestamps, or invalid monetary / item values.
 
-| Metric | Naive Baseline | Optimised MLP |
-|---|---|---|
-| Accuracy | ~97% | Reported from the selected threshold |
-| Recall (Chargebacks) | 0.00% | Validation-tuned; reported on test |
-| F1-Score (Class 1) | 0.0000 | Reported on test |
-| Chargebacks Detected | 0 | Computed from the test split |
-| Potential Loss Prevented | RM 0 | Computed as detected chargebacks × RM 85 |
+## Notebook Workflow
 
-Results are recomputed when the notebook runs; the test split is not used to select the model or thresholds.
+1. **EDA and data contract** — class imbalance, missingness, categorical risk, interaction effects, and time stability.
+2. **Causal feature engineering** — cyclic time features, order-value features, payment × customer interaction, and prior customer behaviour derived only from earlier events.
+3. **Time-aware preparation** — chronological split, train-only imputation / encoding / scaling, and moderate categorical-safe SMOTENC.
+4. **MLP comparison** — baseline, class-weighted, SMOTENC, and focal-loss candidates selected by validation PR-AUC only.
+5. **Final out-of-time evaluation** — PR-AUC with bootstrap interval, ROC-AUC, confusion matrices, and policy comparison on the untouched latest period.
+6. **Model insight and business value** — validation permutation importance, test-period score calibration, review-budget lift, and potential RM loss exposed to intervention.
 
----
+## Run It
 
-## Section B — Pipeline Audit
-
-Three critical bugs were identified in the original consultant script and fixed:
-
-| # | Bug | Root Cause | Business Impact |
-|---|---|---|---|
-| 1 | **Data Leakage** | `StandardScaler` fitted on the full dataset before the train/test split | Model "sees" future data during training; production performance collapses |
-| 2 | **Wrong Metric** | `accuracy` used on a 97/3 imbalanced dataset | A model predicting all-legitimate achieves 97% accuracy; fraud goes undetected |
-| 3 | **No Imbalance Handling** | No `class_weight` or resampling applied | Model ignores the minority class; 0% recall on actual chargebacks |
-
-The audited pipeline corrects all three: split-before-scale, class weights, stratified split, and Recall as the primary metric. See `Section_B_Diagnosis.pdf` and `Section-B_output.png` for the written diagnosis and comparison.
-
----
-
-## Section C — Business Brief (`Section_C_BusinessBrief.pdf`)
-
-A non-technical brief for MyMart's operations and finance stakeholders covering:
-- Why 97% accuracy is misleading in this context
-- What the revised model actually detects (and misses)
-- ROI framing using the RM 85-per-chargeback cost figure
-- Deployment recommendation: high-recall model with manual review queue for flagged transactions
-
----
-
-## Section D — AI Interaction Log (`Section_D_AILog.pdf`)
-
-Documents AI-assisted development interactions in accordance with assignment disclosure requirements.
-
----
-
-## Dependencies
+### Local Jupyter
 
 ```bash
-pip install tensorflow pandas numpy matplotlib seaborn scikit-learn imbalanced-learn
+python -m pip install tensorflow pandas numpy matplotlib seaborn scikit-learn imbalanced-learn jupyter
+jupyter lab
 ```
 
-| Library | Purpose |
+Open `Section A.ipynb` and run all cells from top to bottom. Keep `mymart_transactions_v1.csv` in the same directory as the notebook.
+
+### Google Colab
+
+1. Upload `Section A.ipynb` and `mymart_transactions_v1.csv`.
+2. Open the notebook in Colab.
+3. Run all cells. The first code cell installs only dependencies that are missing.
+
+The notebook uses a fixed seed (`42`) and attempts deterministic TensorFlow operations where the runtime supports them. Small numerical variation across TensorFlow / hardware versions is still normal.
+
+## Key Configuration
+
+Near the top of the notebook, adjust these settings to model MyMart's actual operating conditions:
+
+| Setting | Default | Meaning |
+|---|---:|---|
+| `RM_PER_CHARGEBACK` | `85` | Direct cost assumed for one missed chargeback |
+| `TARGET_RECALL` | `0.90` | Recall target for the high-recall policy scenario |
+| `REVIEW_BUDGET_FRACTION` | `0.10` | Share of current transactions routed to manual review |
+| `SMOTE_TARGET_RATIO` | `0.50` | Minority / majority ratio after SMOTENC on training data |
+| `N_BOOTSTRAPS` | `1000` | Resamples used for the held-out PR-AUC interval |
+
+The top-`k` capacity policy is generally the safest deployment starting point: it has a fixed workload and does not need test labels or a rigid score threshold. Set it from real staffing capacity, not from the default value.
+
+## Metrics That Matter
+
+| Metric | Why it is used |
 |---|---|
-| `tensorflow` / `keras` | MLP model, Focal Loss, callbacks |
-| `scikit-learn` | Preprocessing, metrics, permutation importance, calibration |
-| `imbalanced-learn` | SMOTENC categorical-safe oversampling |
-| `pandas` / `numpy` | Data wrangling |
-| `matplotlib` / `seaborn` | Visualisations |
+| PR-AUC | Primary model-selection metric for a rare positive class; its no-skill reference is the chargeback rate |
+| Recall | Share of chargebacks sent to intervention |
+| Precision / lift | Quality and concentration of the review queue |
+| Flag rate / review capacity | Operational workload created by a policy |
+| Balanced accuracy | Prevents legitimate-class volume from hiding fraud failure |
+| Bootstrap PR-AUC interval | Uncertainty around the final out-of-time ranking estimate |
 
----
+Accuracy is shown only as a cautionary comparison. It is not used to select the model or operating policy.
 
-## Running the Notebook
+## Business Interpretation
 
-1. Place `mymart_transactions_v1.csv` beside the notebook, or upload it to `/content/` in Google Colab
-2. Open `Section A.ipynb` in Colab
-3. Run all cells in order — dependencies are installed in Cell 2 when missing
-4. Review the validation-tuned thresholds and recomputed test-set business-impact table
+The MLP should be treated as a **risk-ranking tool**, not an autonomous decline engine. `Potential RM loss prevented` assumes a flagged true chargeback is successfully stopped or resolved by the downstream review process. It does not include reviewer cost, customer friction, false-positive recovery, or intervention effectiveness; a live pilot must measure those before an ROI claim is made.
 
-> Section B is represented by the diagnosis report and comparison chart included in this project.
+Raw scores are not automatically calibrated probabilities, particularly after class weighting, focal loss, or oversampling. If another system needs a probability, fit calibration on a separate recent labelled dataset and evaluate it again on future data.
 
----
+## Sections B–D
 
-## Key Takeaways
+- `Section_B_Diagnosis.pdf` documents the original pipeline audit: leakage, unsuitable accuracy reporting, and missing imbalance handling.
+- `Section-B_output.png` visualises the Section B before / after comparison.
+- `Section_C_BusinessBrief.pdf` communicates the business case to non-technical stakeholders.
+- `Section_D_AILog.pdf` records AI-assisted development interactions for the assignment disclosure.
 
-- **Accuracy is a misleading metric for imbalanced fraud data.** Always evaluate with Precision, Recall, F1, and AUC-PR.
-- **Data leakage is silent.** Fitting a scaler before splitting inflates validation scores and hides production failures.
-- **Threshold tuning matters.** The 0.5 default is not optimal for minority-class detection; calibrate it against the actual business cost of false negatives vs. false positives.
-- **Keep the test set honest.** Select the winning strategy, thresholds, and feature explanations without using test labels; use test data only for final assessment and business estimates.
+## Limitations and Next Steps
+
+- The available data has limited behavioural depth, so no result should be interpreted as a safe automatic-blocking policy.
+- Historical features assume the transaction stream is complete and available in real time.
+- Feature importance is predictive association, not causal explanation; assess fairness, availability, and policy feedback before production use.
+- The highest-value next data sources are device fingerprints, payment / address relationships, velocity features, and manual-review dispositions.
+- Retrain and re-evaluate when new labels arrive, the schema changes, or monitoring indicates drift.
